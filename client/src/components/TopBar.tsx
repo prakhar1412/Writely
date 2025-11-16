@@ -22,7 +22,7 @@ export default function TopBar({
   return (
     <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-card-border">
       <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold text-foreground">Whiteboard</h1>
+        <h1 className="text-lg font-semibold text-foreground">Writely</h1>
         <Badge variant="secondary" data-testid="badge-room-code" className="font-mono">
           {roomCode}
         </Badge>
