@@ -14,6 +14,7 @@ export const rooms = pgTable("rooms", {
 });
 
 export const insertRoomSchema = createInsertSchema(rooms).omit({
+  code: true,
   createdAt: true,
   strokes: true,
   templateImage: true,

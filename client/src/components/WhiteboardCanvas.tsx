@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
+import type { Stroke, InsertStroke } from '@shared/schema';
 
 interface WhiteboardCanvasProps {
   templateImage?: string;
-  onStrokeComplete?: (stroke: any) => void;
+  onStrokeComplete?: (stroke: InsertStroke) => void;
   color?: string;
   brushSize?: number;
   tool?: 'pen' | 'eraser';
   isLocked?: boolean;
+  existingStrokes?: Stroke[];
 }
 
 export default function WhiteboardCanvas({
@@ -16,10 +18,11 @@ export default function WhiteboardCanvas({
   brushSize = 3,
   tool = 'pen',
   isLocked = false,
+  existingStrokes = [],
 }: WhiteboardCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [currentStroke, setCurrentStroke] = useState<any[]>([]);
+  const [currentStroke, setCurrentStroke] = useState<{ x: number; y: number }[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -37,13 +40,44 @@ export default function WhiteboardCanvas({
       
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // Redraw existing strokes
+      existingStrokes.forEach(drawStoredStroke);
+    };
+
+    const drawStoredStroke = (stroke: Stroke) => {
+      if (!ctx || stroke.points.length === 0) return;
+
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+      
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+      
+      ctx.strokeStyle = stroke.tool === 'eraser' ? '#ffffff' : stroke.color;
+      ctx.lineWidth = stroke.brushSize;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
     };
 
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    return () => window.removeEventListener('resize', resizeCanvas);
-  }, []);
+    // Listen for remote strokes
+    const handleRemoteStroke = (event: Event) => {
+      const customEvent = event as CustomEvent<Stroke>;
+      drawStoredStroke(customEvent.detail);
+    };
+
+    window.addEventListener('remote-stroke', handleRemoteStroke);
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas);
+      window.removeEventListener('remote-stroke', handleRemoteStroke);
+    };
+  }, [existingStrokes]);
 
   const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (isLocked) return;
