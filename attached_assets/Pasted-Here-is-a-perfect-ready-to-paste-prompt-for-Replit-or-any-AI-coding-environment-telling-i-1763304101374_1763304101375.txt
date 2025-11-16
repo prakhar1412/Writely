@@ -1,0 +1,239 @@
+Here is a **perfect, ready-to-paste prompt** for **Replit (or any AI coding environment)** telling it exactly **what to build**, **how to structure**, and **what theme/style to follow**, based on the **architecture diagram** + **UI wireframes** you approved.
+
+You can paste this entire prompt directly in **Replit AI** → it will know exactly what to generate.
+
+---
+
+# ⭐ **MASTER PROMPT FOR REPLIT — BUILD REAL-TIME WHITEBOARD WEBSITE**
+
+**Build me a complete full-stack real-time whiteboard web application** with a **clean minimal UI theme** (white backgrounds, soft shadows, rounded corners, pastel colors, modern typography).
+
+Follow the **architecture** and **UI wireframes** described below exactly.
+
+---
+
+# 🧱 **PROJECT REQUIREMENTS**
+
+## **1. Core Features**
+
+Build a real-time collaborative whiteboard website with:
+
+### **Drawing + Tools**
+
+* Freehand drawing
+* Color picker
+* Brush size slider
+* Eraser
+* Undo/redo
+* Clear board
+* Shape tools (optional)
+* Save as image
+
+### **Real-Time Sync**
+
+* Sync drawing strokes across all users
+* Very low latency
+* WebSocket-based
+
+### **Chat System**
+
+* Real-time text chat
+* Username support
+* Message timestamps
+
+### **Room System**
+
+* Users can create/join rooms
+* Unique room code
+* Host controls:
+
+  * Lock/unlock drawing
+  * Clear board
+  * Template switching
+  * Kick/mute users
+
+### **Voice Chat (WebRTC)**
+
+* Mute/unmute option
+* Show speaking indicators
+* Works per room
+
+### **Templates**
+
+Templates users can apply to the whiteboard:
+
+* Graph paper
+* Dotted grid
+* Ruled lines
+* Mind map
+* Flowchart layout
+* UI wireframe
+
+### **Playback**
+
+* Record every stroke
+* Play full drawing history
+* Controls:
+
+  * Play/Pause
+  * Speed selector
+  * Timeline slider
+
+---
+
+# 🧩 **2. Architecture to Follow**
+
+Use the architecture below:
+
+### **Frontend**
+
+* HTML, CSS, JS
+* Canvas API
+* Socket.io-client
+* WebRTC API
+* Minimal, clean UI
+* Layout must match provided wireframes:
+
+  * Left: Tools
+  * Center: Whiteboard
+  * Right: Chat + User List
+  * Top bar: Room info + exit
+  * Popup modals for templates + playback
+
+### **Backend**
+
+* Node.js + Express
+* Socket.io for real-time events
+* REST endpoints for:
+
+  * Creating rooms
+  * Listing templates
+  * Fetching playback data
+* WebRTC signaling server
+* Room manager (in-memory)
+* Playback controller (store stroke timeline)
+
+### **Storage**
+
+* Store templates locally (images)
+* Store playback data in JSON format
+* No heavy DB needed for prototype
+
+---
+
+# 🎨 **3. UI Layout (Follow Exactly)**
+
+Follow this layout:
+
+### **Top Bar**
+
+* Logo
+* Room Code
+* User count
+* Leave button
+
+### **Left Toolbar (Vertical)**
+
+* Pen
+* Brush size
+* Colors
+* Eraser
+* Undo
+* Redo
+* Shapes
+* Clear
+* Templates
+* Voice toggle
+* Playback
+* Save
+
+### **Center**
+
+* Large whiteboard canvas (full height)
+
+### **Right Sidebar**
+
+* Chat window
+* Chat input
+* Participants list
+* Speaking indicators
+
+### **Popups**
+
+* Template selector
+* Playback controls UI
+
+---
+
+# 🎨 **4. Design Theme Requirements**
+
+Apply a **minimal, elegant, modern theme**:
+
+* Colors: pastel blues, greys, whites
+* Soft shadows (e.g., `0 4px 12px rgba(0,0,0,0.08)`)
+* Rounded corners (8–14px)
+* Clean typography (Inter, Poppins, or Roboto)
+* No clutter
+* Lots of spacing
+* Toolbar icons minimal + clean
+* All popups centered with frosted-glass style optional
+
+---
+
+# ⚡ **5. Technical Requirements**
+
+* Throttle draw events to reduce bandwidth
+* Ensure smooth WebRTC voice communication
+* Room isolation (one canvas per room)
+* Playback must reconstruct strokes exactly
+* Templates must layer beneath canvas
+* Code must be modular + clean
+* Include clear folder structure:
+
+```
+/public
+  index.html
+  style.css
+  script.js
+  icons/
+  templates/
+
+server.js
+roomManager.js
+playback.js
+signaling.js
+package.json
+```
+
+---
+
+# 🚀 **6. What to Deliver**
+
+Replit should generate:
+
+✔ Full frontend code (HTML/CSS/JS)
+✔ Fully functional Node.js backend
+✔ WebSocket logic for drawing & chat
+✔ WebRTC signaling logic
+✔ Playback engine
+✔ Template management
+✔ Room management system
+✔ Clean UI matching the wireframes
+✔ Instructions to run the project
+
+---
+
+# 📝 **Final Task for Replit**
+
+**Generate the complete working project with all features above**, using the architecture and UI layout exactly as described, with a clean minimal theme.
+
+---
+
+If you want, I can also generate:
+
+👉 **High-fidelity UI theme**
+👉 **Color palette master sheet**
+👉 **Logo design**
+👉 **Full SRS documentation**
+
+Would you like any of these?
