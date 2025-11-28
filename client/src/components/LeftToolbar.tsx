@@ -1,11 +1,16 @@
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
-import { Pen, Eraser, Undo2, Redo2, Shapes, Trash2, Image, Mic, MicOff, Play, Save } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Pen, Eraser, Undo2, Redo2, Trash2, Square, Circle, Type, Download, Highlighter } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 interface LeftToolbarProps {
-  activeTool: 'pen' | 'eraser';
-  onToolChange: (tool: 'pen' | 'eraser') => void;
+  activeTool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter";
+  onToolChange: (tool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter") => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onClear?: () => void;
@@ -33,31 +38,127 @@ export default function LeftToolbar({
   canRedo = false,
 }: LeftToolbarProps) {
   return (
-    <div className="flex flex-col items-center gap-2 p-3 bg-card border-r border-card-border h-full">
+    <div className="flex flex-col items-center gap-2 p-3 bg-card/90 backdrop-blur shadow-2xl rounded-2xl border border-border/50">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            size="icon"
+            variant={["pen", "marker", "highlighter"].includes(activeTool) ? "default" : "ghost"}
+            data-testid="button-tool-brush"
+            className={cn(
+              "toggle-elevate",
+              ["pen", "marker", "highlighter"].includes(activeTool) && "toggle-elevated"
+            )}
+          >
+            <Pen className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent side="right" className="w-40 p-2" align="start">
+          <div className="flex flex-col gap-1">
+            <Button
+              variant={activeTool === "pen" ? "secondary" : "ghost"}
+              className="justify-start"
+              onClick={() => onToolChange("pen")}
+            >
+              <Pen className="h-4 w-4 mr-2" />
+              Pen
+            </Button>
+            <Button
+              variant={activeTool === "marker" ? "secondary" : "ghost"}
+              className="justify-start"
+              onClick={() => onToolChange("marker")}
+            >
+              <Highlighter className="h-4 w-4 mr-2" />
+              Marker
+            </Button>
+            <Button
+              variant={activeTool === "highlighter" ? "secondary" : "ghost"}
+              className="justify-start"
+              onClick={() => onToolChange("highlighter")}
+            >
+              <Highlighter className="h-4 w-4 mr-2 opacity-50" />
+              Highlighter
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            size="icon"
+            variant={activeTool === "eraser" ? "default" : "ghost"}
+            data-testid="button-tool-eraser"
+            className={cn(
+              "toggle-elevate",
+              activeTool === "eraser" && "toggle-elevated"
+            )}
+          >
+            <Eraser className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent side="right" className="w-40 p-2" align="start">
+          <div className="flex flex-col gap-1">
+            <Button
+              variant={activeTool === "eraser" ? "secondary" : "ghost"}
+              className="justify-start"
+              onClick={() => onToolChange("eraser")}
+            >
+              <Eraser className="h-4 w-4 mr-2" />
+              Eraser
+            </Button>
+            <Button
+              variant="ghost"
+              className="justify-start text-destructive hover:text-destructive"
+              onClick={onClear}
+              data-testid="button-clear"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Clear Canvas
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Separator className="my-2" />
+
       <Button
         size="icon"
-        variant={activeTool === 'pen' ? 'default' : 'ghost'}
-        onClick={() => onToolChange('pen')}
-        data-testid="button-tool-pen"
+        variant={activeTool === "rectangle" ? "default" : "ghost"}
+        onClick={() => onToolChange("rectangle")}
+        data-testid="button-tool-rectangle"
         className={cn(
-          'toggle-elevate',
-          activeTool === 'pen' && 'toggle-elevated'
+          "toggle-elevate",
+          activeTool === "rectangle" && "toggle-elevated"
         )}
       >
-        <Pen className="h-4 w-4" />
+        <Square className="h-4 w-4" />
       </Button>
 
       <Button
         size="icon"
-        variant={activeTool === 'eraser' ? 'default' : 'ghost'}
-        onClick={() => onToolChange('eraser')}
-        data-testid="button-tool-eraser"
+        variant={activeTool === "circle" ? "default" : "ghost"}
+        onClick={() => onToolChange("circle")}
+        data-testid="button-tool-circle"
         className={cn(
-          'toggle-elevate',
-          activeTool === 'eraser' && 'toggle-elevated'
+          "toggle-elevate",
+          activeTool === "circle" && "toggle-elevated"
         )}
       >
-        <Eraser className="h-4 w-4" />
+        <Circle className="h-4 w-4" />
+      </Button>
+
+      <Button
+        size="icon"
+        variant={activeTool === "text" ? "default" : "ghost"}
+        onClick={() => onToolChange("text")}
+        data-testid="button-tool-text"
+        className={cn(
+          "toggle-elevate",
+          activeTool === "text" && "toggle-elevated"
+        )}
+      >
+        <Type className="h-4 w-4" />
       </Button>
 
       <Separator className="my-2" />
@@ -87,60 +188,10 @@ export default function LeftToolbar({
       <Button
         size="icon"
         variant="ghost"
-        data-testid="button-shapes"
-      >
-        <Shapes className="h-4 w-4" />
-      </Button>
-
-      <Button
-        size="icon"
-        variant="ghost"
-        onClick={onClear}
-        data-testid="button-clear"
-      >
-        <Trash2 className="h-4 w-4" />
-      </Button>
-
-      <Button
-        size="icon"
-        variant="ghost"
-        onClick={onTemplateClick}
-        data-testid="button-templates"
-      >
-        <Image className="h-4 w-4" />
-      </Button>
-
-      <Separator className="my-2" />
-
-      <Button
-        size="icon"
-        variant={isVoiceActive ? 'default' : 'ghost'}
-        onClick={onVoiceToggle}
-        data-testid="button-voice-toggle"
-        className={cn(
-          'toggle-elevate',
-          isVoiceActive && 'toggle-elevated'
-        )}
-      >
-        {isVoiceActive ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-      </Button>
-
-      <Button
-        size="icon"
-        variant="ghost"
-        onClick={onPlaybackClick}
-        data-testid="button-playback"
-      >
-        <Play className="h-4 w-4" />
-      </Button>
-
-      <Button
-        size="icon"
-        variant="ghost"
         onClick={onSave}
         data-testid="button-save"
       >
-        <Save className="h-4 w-4" />
+        <Download className="h-4 w-4" />
       </Button>
     </div>
   );

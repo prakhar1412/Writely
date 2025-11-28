@@ -1,6 +1,7 @@
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { LogOut, Users, Lock, Unlock } from 'lucide-react';
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { LogOut, Users, Lock, Unlock, Share2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 interface TopBarProps {
   roomCode: string;
@@ -19,11 +20,16 @@ export default function TopBar({
   onToggleLock,
   onLeave,
 }: TopBarProps) {
+  const { toast } = useToast();
   return (
     <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-card-border">
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-semibold text-foreground">Writely</h1>
-        <Badge variant="secondary" data-testid="badge-room-code" className="font-mono">
+        <Badge
+          variant="secondary"
+          data-testid="badge-room-code"
+          className="font-mono"
+        >
           {roomCode}
         </Badge>
       </div>
@@ -34,26 +40,23 @@ export default function TopBar({
           <span data-testid="text-user-count">{userCount}</span>
         </div>
 
-        {isHost && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onToggleLock}
-            data-testid="button-toggle-lock"
-          >
-            {isLocked ? (
-              <>
-                <Lock className="h-4 w-4 mr-2" />
-                Locked
-              </>
-            ) : (
-              <>
-                <Unlock className="h-4 w-4 mr-2" />
-                Unlocked
-              </>
-            )}
-          </Button>
-        )}
+
+
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            const url = `${window.location.origin}/room/${roomCode}`;
+            navigator.clipboard.writeText(url);
+            toast({
+              description: "Link copied to clipboard",
+            });
+          }}
+          data-testid="button-share"
+        >
+          <Share2 className="h-4 w-4 mr-2" />
+          Share
+        </Button>
 
         <Button
           size="sm"

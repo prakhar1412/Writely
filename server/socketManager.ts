@@ -10,6 +10,9 @@ import {
   setTemplateSchema,
   toggleLockSchema,
   clearBoardSchema,
+  voiceSignalSchema,
+  voiceStateSchema,
+  raiseHandSchema,
 } from '@shared/schema';
 import { randomUUID } from 'crypto';
 
@@ -50,6 +53,8 @@ export class SocketManager {
             roomCode: validated.roomCode,
             socketId: socket.id,
             isSpeaking: false,
+            isMuted: false,
+            isHandRaised: false,
             isOnline: true,
           };
 
@@ -191,14 +196,52 @@ export class SocketManager {
         }
       });
 
-      // Toggle voice (just broadcasting state, no actual WebRTC here)
-      socket.on('toggle-voice', (data: { isSpeaking: boolean }) => {
+      // Voice signaling
+      socket.on('voice-signal', (data) => {
+        try {
+          const validated = voiceSignalSchema.parse(data);
+          const participant = this.participants.get(socket.id);
+          if (!participant) return;
+
+          // Relay signal to target
+          this.io.to(validated.targetId).emit('voice-signal', {
+            userId: socket.id,
+            signal: validated.signal,
+          });
+        } catch (error) {
+          console.error('Error signaling voice:', error);
+        }
+      });
+
+      // Voice state change (mute/speaking)
+      socket.on('voice-state-change', (data) => {
         const participant = this.participants.get(socket.id);
         if (!participant) return;
 
-        participant.isSpeaking = data.isSpeaking;
-        this.participants.set(socket.id, participant);
-        this.broadcastParticipants(participant.roomCode);
+        try {
+          const validated = voiceStateSchema.parse(data);
+          participant.isMuted = validated.isMuted;
+          participant.isSpeaking = validated.isSpeaking;
+          this.participants.set(socket.id, participant);
+          this.broadcastParticipants(participant.roomCode);
+        } catch (error) {
+          console.error('Error changing voice state:', error);
+        }
+      });
+
+      // Raise hand
+      socket.on('raise-hand', (data) => {
+        const participant = this.participants.get(socket.id);
+        if (!participant) return;
+
+        try {
+          const validated = raiseHandSchema.parse(data);
+          participant.isHandRaised = validated.isRaised;
+          this.participants.set(socket.id, participant);
+          this.broadcastParticipants(participant.roomCode);
+        } catch (error) {
+          console.error('Error raising hand:', error);
+        }
       });
 
       // Disconnect
