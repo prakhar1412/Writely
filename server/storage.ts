@@ -11,7 +11,7 @@ import {
   messageSchema,
 } from "@shared/schema";
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/writely";
+const MONGO_URI = process.env.MONGO_URI;
 
 const PointSchema = new mongoose.Schema({
   x: { type: Number, required: true },
@@ -77,7 +77,7 @@ export class DbStorage implements IStorage {
   }
 
   private async connect() {
-    if (this.connected) return;
+    if (this.connected || !MONGO_URI) return;
     try {
       await mongoose.connect(MONGO_URI);
       this.connected = true;
@@ -164,4 +164,87 @@ export class DbStorage implements IStorage {
   }
 }
 
-export const storage = new DbStorage();
+export class MemStorage implements IStorage {
+  private rooms: Map<string, Room>;
+  private messages: Map<string, Message[]>;
+
+  constructor() {
+    this.rooms = new Map();
+    this.messages = new Map();
+  }
+
+  async createRoom(insertRoom: InsertRoom): Promise<Room> {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const room: Room = {
+      code,
+      hostId: insertRoom.hostId,
+      isLocked: false,
+      templateImage: "",
+      strokes: [],
+      createdAt: new Date(),
+    };
+    this.rooms.set(code, room);
+    return room;
+  }
+
+  async getRoom(code: string): Promise<Room | undefined> {
+    return this.rooms.get(code.toUpperCase());
+  }
+
+  async updateRoomLock(code: string, isLocked: boolean): Promise<void> {
+    const room = this.rooms.get(code.toUpperCase());
+    if (room) {
+      room.isLocked = isLocked;
+      this.rooms.set(code.toUpperCase(), room);
+    }
+  }
+
+  async updateRoomTemplate(code: string, templateImage: string): Promise<void> {
+    const room = this.rooms.get(code.toUpperCase());
+    if (room) {
+      room.templateImage = templateImage;
+      this.rooms.set(code.toUpperCase(), room);
+    }
+  }
+
+  async addStrokeToRoom(code: string, stroke: Stroke): Promise<void> {
+    const room = this.rooms.get(code.toUpperCase());
+    if (room) {
+      room.strokes.push(stroke);
+      this.rooms.set(code.toUpperCase(), room);
+    }
+  }
+
+  async clearRoomStrokes(code: string): Promise<void> {
+    const room = this.rooms.get(code.toUpperCase());
+    if (room) {
+      room.strokes = [];
+      this.rooms.set(code.toUpperCase(), room);
+    }
+  }
+
+  async createMessage(insertMessage: InsertMessage): Promise<Message> {
+    const id = Math.random().toString(36).substring(7);
+    const message: Message = {
+      id,
+      roomCode: insertMessage.roomCode.toUpperCase(),
+      username: insertMessage.username,
+      text: insertMessage.text,
+      timestamp: new Date(),
+    };
+
+    const roomMessages = this.messages.get(insertMessage.roomCode.toUpperCase()) || [];
+    roomMessages.push(message);
+    this.messages.set(insertMessage.roomCode.toUpperCase(), roomMessages);
+
+    return message;
+  }
+
+  async getMessages(roomCode: string, limit: number = 100): Promise<Message[]> {
+    return (this.messages.get(roomCode.toUpperCase()) || [])
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .slice(0, limit);
+  }
+}
+
+export const storage = MONGO_URI ? new DbStorage() : new MemStorage();
