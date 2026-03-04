@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Pen, Eraser, Undo2, Redo2, Trash2, Square, Circle, Type, Download, Highlighter } from "lucide-react";
+import { Pen, Eraser, Undo2, Redo2, Trash2, Square, Circle, Type, Download, Highlighter, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -9,8 +9,8 @@ import {
 } from "@/components/ui/popover";
 
 interface LeftToolbarProps {
-  activeTool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter";
-  onToolChange: (tool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter") => void;
+  activeTool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter" | "magic";
+  onToolChange: (tool: "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter" | "magic") => void;
   onUndo?: () => void;
   onRedo?: () => void;
   onClear?: () => void;
@@ -82,6 +82,20 @@ export default function LeftToolbar({
           </div>
         </PopoverContent>
       </Popover>
+
+      <Button
+        size="icon"
+        variant={activeTool === "magic" ? "default" : "ghost"}
+        onClick={() => onToolChange("magic")}
+        data-testid="button-tool-magic"
+        className={cn(
+          "toggle-elevate",
+          activeTool === "magic" && "toggle-elevated"
+        )}
+        title="Magic Pen (Auto-shapes)"
+      >
+        <Wand2 className="h-4 w-4" />
+      </Button>
 
       <Popover>
         <PopoverTrigger asChild>

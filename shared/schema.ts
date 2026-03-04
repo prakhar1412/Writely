@@ -13,7 +13,7 @@ export const strokeSchema = z.object({
   points: z.array(pointSchema),
   color: z.string(),
   brushSize: z.number(),
-  tool: z.enum(["pen", "eraser", "rectangle", "circle", "text", "marker", "highlighter"]),
+  tool: z.enum(["pen", "eraser", "rectangle", "circle", "text", "marker", "highlighter", "magic"]),
   text: z.string().optional(),
   timestamp: z.number(),
 });
@@ -77,17 +77,34 @@ export type Participant = z.infer<typeof participantSchema>;
 
 // Socket event schemas for validation
 export const joinRoomSchema = z.object({
-  roomCode: z.string().min(1),
-  username: z.string().min(1),
+  roomCode: z.string().regex(/^[A-Z0-9]{6}$/, 'Room code must be 6 alphanumeric characters'),
+  username: z
+    .string()
+    .min(1)
+    .max(32)
+    .transform(s => s.trim().replace(/<[^>]*>/g, '')),  // strip HTML
 });
 
 export const createRoomSchema = z.object({
-  username: z.string().min(1),
+  username: z
+    .string()
+    .min(1)
+    .max(32)
+    .transform(s => s.trim().replace(/<[^>]*>/g, '')),
 });
 
 export const sendMessageSchema = z.object({
-  text: z.string().min(1),
+  text: z.string().min(1).max(1000),
 });
+
+// Cursor presence
+export const cursorMoveSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
+export type CursorMoveEvent = z.infer<typeof cursorMoveSchema>;
+export type RemoteCursor = { socketId: string; username: string; x: number; y: number };
 
 export const drawStrokeSchema = insertStrokeSchema;
 

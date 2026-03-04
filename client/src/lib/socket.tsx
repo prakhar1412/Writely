@@ -1,13 +1,22 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  ReactNode,
+} from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { 
-  Room, 
-  Message, 
-  Participant, 
+import { EVENTS } from '@shared/events';
+import type {
+  Room,
+  Message,
+  Participant,
   Stroke,
   JoinRoomEvent,
-  SendMessageEvent,
   DrawStrokeEvent,
+  RemoteCursor,
 } from '@shared/schema';
 
 interface SocketContextType {
@@ -17,6 +26,13 @@ interface SocketContextType {
   messages: Message[];
   participants: Participant[];
   participantId: string | null;
+  /** Strokes from remote users, painted and then consumed by the canvas. */
+  remoteStrokes: Stroke[];
+  consumeRemoteStrokes: () => void;
+  /** Bumps on every board-clear so the canvas can reset. */
+  boardClearCount: number;
+  /** Live cursor positions for all remote participants. */
+  remoteCursors: RemoteCursor[];
   joinRoom: (data: JoinRoomEvent) => void;
   sendMessage: (text: string) => void;
   drawStroke: (stroke: DrawStrokeEvent) => void;
@@ -24,129 +40,109 @@ interface SocketContextType {
   setTemplate: (templateImage: string) => void;
   toggleLock: () => void;
   toggleVoice: (isSpeaking: boolean) => void;
+  /** Emit throttled cursor position (50 ms). */
+  emitCursorMove: (x: number, y: number) => void;
 }
 
 const SocketContext = createContext<SocketContextType | null>(null);
 
 export function useSocket() {
   const context = useContext(SocketContext);
-  if (!context) {
-    throw new Error('useSocket must be used within SocketProvider');
-  }
+  if (!context) throw new Error('useSocket must be used within SocketProvider');
   return context;
 }
 
-interface SocketProviderProps {
-  children: ReactNode;
-}
-
-export function SocketProvider({ children }: SocketProviderProps) {
+export function SocketProvider({ children }: { children: ReactNode }) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [room, setRoom] = useState<Room | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [participantId, setParticipantId] = useState<string | null>(null);
+  const [remoteStrokes, setRemoteStrokes] = useState<Stroke[]>([]);
+  const [boardClearCount, setBoardClearCount] = useState(0);
+  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
+
+  // Throttle ref for cursor emit (50 ms)
+  const cursorThrottle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    const socketInstance = io({
-      path: '/socket.io',
-    });
+    const s = io({ path: '/socket.io' });
+    socketRef.current = s;
 
-    socketInstance.on('connect', () => {
-      console.log('Connected to socket server');
-      setIsConnected(true);
-    });
+    s.on('connect', () => { setIsConnected(true); });
+    s.on('disconnect', () => { setIsConnected(false); });
 
-    socketInstance.on('disconnect', () => {
-      console.log('Disconnected from socket server');
-      setIsConnected(false);
-    });
-
-    socketInstance.on('room-joined', (data: { room: Room; messages: Message[]; participantId: string }) => {
-      console.log('Joined room:', data.room);
+    s.on(EVENTS.ROOM_JOINED, (data: { room: Room; messages: Message[]; participantId: string }) => {
       setRoom(data.room);
       setMessages(data.messages);
       setParticipantId(data.participantId);
     });
 
-    socketInstance.on('new-message', (message: Message) => {
+    s.on(EVENTS.NEW_MESSAGE, (message: Message) => {
       setMessages(prev => [...prev, message]);
     });
 
-    socketInstance.on('new-stroke', (stroke: Stroke) => {
-      // Handle new stroke from other users
-      window.dispatchEvent(new CustomEvent('remote-stroke', { detail: stroke }));
+    s.on(EVENTS.NEW_STROKE, (stroke: Stroke) => {
+      setRemoteStrokes(prev => [...prev, stroke]);
     });
 
-    socketInstance.on('participants-updated', (updatedParticipants: Participant[]) => {
-      setParticipants(updatedParticipants);
+    s.on(EVENTS.PARTICIPANTS_UPDATED, (updated: Participant[]) => {
+      setParticipants(updated);
     });
 
-    socketInstance.on('board-cleared', () => {
-      window.dispatchEvent(new CustomEvent('board-cleared'));
+    s.on(EVENTS.BOARD_CLEARED, () => {
+      setBoardClearCount(c => c + 1);
     });
 
-    socketInstance.on('template-changed', (data: { templateImage: string }) => {
+    s.on(EVENTS.TEMPLATE_CHANGED, (data: { templateImage: string }) => {
       setRoom(prev => prev ? { ...prev, templateImage: data.templateImage } : null);
     });
 
-    socketInstance.on('lock-changed', (data: { isLocked: boolean }) => {
+    s.on(EVENTS.LOCK_CHANGED, (data: { isLocked: boolean }) => {
       setRoom(prev => prev ? { ...prev, isLocked: data.isLocked } : null);
     });
 
-    socketInstance.on('error', (error: { message: string }) => {
+    // ── Cursor presence ──────────────────────────────────────────────────────
+    s.on(EVENTS.CURSOR_UPDATE, (cursor: RemoteCursor) => {
+      setRemoteCursors(prev => {
+        // Sentinel x === -1 means the user disconnected — remove their cursor
+        if (cursor.x === -1) return prev.filter(c => c.socketId !== cursor.socketId);
+        const idx = prev.findIndex(c => c.socketId === cursor.socketId);
+        if (idx === -1) return [...prev, cursor];
+        const next = [...prev];
+        next[idx] = cursor;
+        return next;
+      });
+    });
+
+    s.on(EVENTS.ERROR, (error: { message: string }) => {
       console.error('Socket error:', error.message);
     });
 
-    setSocket(socketInstance);
-
-    return () => {
-      socketInstance.close();
-    };
+    setSocket(s);
+    return () => { s.close(); };
   }, []);
 
-  const joinRoom = (data: JoinRoomEvent) => {
-    if (socket) {
-      socket.emit('join-room', data);
-    }
-  };
+  const consumeRemoteStrokes = useCallback(() => setRemoteStrokes([]), []);
 
-  const sendMessage = (text: string) => {
-    if (socket) {
-      socket.emit('send-message', { text });
-    }
-  };
+  // Throttled cursor emitter – max 1 emit per 50 ms
+  const emitCursorMove = useCallback((x: number, y: number) => {
+    if (cursorThrottle.current) return;
+    socketRef.current?.emit(EVENTS.CURSOR_MOVE, { x, y });
+    cursorThrottle.current = setTimeout(() => {
+      cursorThrottle.current = null;
+    }, 50);
+  }, []);
 
-  const drawStroke = (stroke: DrawStrokeEvent) => {
-    if (socket) {
-      socket.emit('draw-stroke', stroke);
-    }
-  };
-
-  const clearBoard = () => {
-    if (socket) {
-      socket.emit('clear-board');
-    }
-  };
-
-  const setTemplate = (templateImage: string) => {
-    if (socket) {
-      socket.emit('set-template', { templateImage });
-    }
-  };
-
-  const toggleLock = () => {
-    if (socket) {
-      socket.emit('toggle-lock');
-    }
-  };
-
-  const toggleVoice = (isSpeaking: boolean) => {
-    if (socket) {
-      socket.emit('toggle-voice', { isSpeaking });
-    }
-  };
+  const joinRoom = (data: JoinRoomEvent) => socketRef.current?.emit(EVENTS.JOIN_ROOM, data);
+  const sendMessage = (text: string) => socketRef.current?.emit(EVENTS.SEND_MESSAGE, { text });
+  const drawStroke = (s: DrawStrokeEvent) => socketRef.current?.emit(EVENTS.DRAW_STROKE, s);
+  const clearBoard = () => socketRef.current?.emit(EVENTS.CLEAR_BOARD);
+  const setTemplate = (img: string) => socketRef.current?.emit(EVENTS.SET_TEMPLATE, { templateImage: img });
+  const toggleLock = () => socketRef.current?.emit(EVENTS.TOGGLE_LOCK);
+  const toggleVoice = (isSpeaking: boolean) => socketRef.current?.emit(EVENTS.TOGGLE_VOICE, { isSpeaking });
 
   return (
     <SocketContext.Provider
@@ -157,6 +153,10 @@ export function SocketProvider({ children }: SocketProviderProps) {
         messages,
         participants,
         participantId,
+        remoteStrokes,
+        consumeRemoteStrokes,
+        boardClearCount,
+        remoteCursors,
         joinRoom,
         sendMessage,
         drawStroke,
@@ -164,6 +164,7 @@ export function SocketProvider({ children }: SocketProviderProps) {
         setTemplate,
         toggleLock,
         toggleVoice,
+        emitCursorMove,
       }}
     >
       {children}

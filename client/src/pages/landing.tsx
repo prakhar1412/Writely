@@ -14,9 +14,11 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, Pen, Sparkles } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Landing() {
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const searchParams = new URLSearchParams(window.location.search);
   const initialTab = searchParams.get("tab") || "create";
   const initialCode = searchParams.get("code") || "";
@@ -25,45 +27,45 @@ export default function Landing() {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleCreateRoom = async () => {
-    if (!username.trim()) return;
+    const trimmed = username.trim();
+    if (!trimmed) return;
 
     setIsLoading(true);
     try {
-      const response = await apiRequest("POST", "/api/rooms/create", {
-        username,
-      });
-
+      const response = await apiRequest("POST", "/api/rooms/create", { username: trimmed });
       const data = await response.json();
       if (data.room) {
-        setLocation(
-          `/room/${data.room.code}?username=${encodeURIComponent(username)}`
-        );
+        setLocation(`/room/${data.room.code}?username=${encodeURIComponent(trimmed)}`);
       }
     } catch (error) {
       console.error("Failed to create room:", error);
+      toast({ variant: "destructive", description: "Failed to create room. Please try again." });
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleJoinRoom = async () => {
-    if (!username.trim() || !roomCode.trim()) return;
+    const trimmedUser = username.trim();
+    const trimmedCode = roomCode.trim().toUpperCase();
+    if (!trimmedUser || !trimmedCode) return;
+
+    if (!/^[A-Z0-9]{6}$/.test(trimmedCode)) {
+      toast({ variant: "destructive", description: "Room code must be 6 alphanumeric characters." });
+      return;
+    }
 
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/rooms/${roomCode.toUpperCase()}`);
+      const response = await fetch(`/api/rooms/${trimmedCode}`);
       if (response.ok) {
-        setLocation(
-          `/room/${roomCode.toUpperCase()}?username=${encodeURIComponent(
-            username
-          )}`
-        );
+        setLocation(`/room/${trimmedCode}?username=${encodeURIComponent(trimmedUser)}`);
       } else {
-        alert("Room not found");
+        toast({ variant: "destructive", description: "Room not found. Check the code and try again." });
       }
     } catch (error) {
       console.error("Failed to join room:", error);
-      alert("Failed to join room");
+      toast({ variant: "destructive", description: "Failed to join room. Please try again." });
     } finally {
       setIsLoading(false);
     }
@@ -131,6 +133,7 @@ export default function Landing() {
                     id="create-username"
                     data-testid="input-create-username"
                     placeholder="Enter your name"
+                    maxLength={32}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     onKeyPress={(e) => e.key === "Enter" && handleCreateRoom()}
@@ -161,6 +164,7 @@ export default function Landing() {
                     id="join-username"
                     data-testid="input-join-username"
                     placeholder="Enter your name"
+                    maxLength={32}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="bg-background/50 border-input/50 focus:bg-background transition-colors"

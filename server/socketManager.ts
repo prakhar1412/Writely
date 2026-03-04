@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
 import { storage } from './storage';
+import type { Room } from '@shared/schema';
 import {
   type Participant,
   type Stroke,
@@ -8,22 +9,60 @@ import {
   sendMessageSchema,
   drawStrokeSchema,
   setTemplateSchema,
-  toggleLockSchema,
-  clearBoardSchema,
   voiceSignalSchema,
   voiceStateSchema,
   raiseHandSchema,
+  cursorMoveSchema,
 } from '@shared/schema';
+import { EVENTS } from '@shared/events';
 import { randomUUID } from 'crypto';
+
+// ─── Simple token-bucket rate limiter ────────────────────────────────────────
+// Each socket gets a bucket that refills RATE_REFILL tokens per RATE_WINDOW ms.
+// An event costs 1 token. If the bucket is empty the event is silently dropped.
+const RATE_WINDOW = 1000; // ms
+const RATE_REFILL = 20;   // max events per window
+
+class RateLimiter {
+  private buckets = new Map<string, { tokens: number; lastRefill: number }>();
+
+  allow(socketId: string): boolean {
+    const now = Date.now();
+    let bucket = this.buckets.get(socketId);
+    if (!bucket) {
+      bucket = { tokens: RATE_REFILL, lastRefill: now };
+      this.buckets.set(socketId, bucket);
+    }
+    // Refill tokens proportional to elapsed time
+    const elapsed = now - bucket.lastRefill;
+    if (elapsed >= RATE_WINDOW) {
+      bucket.tokens = RATE_REFILL;
+      bucket.lastRefill = now;
+    }
+    if (bucket.tokens <= 0) return false;
+    bucket.tokens--;
+    return true;
+  }
+
+  remove(socketId: string) {
+    this.buckets.delete(socketId);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class SocketManager {
   private io: SocketIOServer;
   private participants: Map<string, Participant> = new Map();
+  /** In-memory room cache – avoids a DB round-trip on every socket event. */
+  private roomCache: Map<string, Room> = new Map();
+  private rateLimiter = new RateLimiter();
 
   constructor(httpServer: HTTPServer) {
+    const allowedOrigin = process.env.ALLOWED_ORIGIN ?? '*';
     this.io = new SocketIOServer(httpServer, {
       cors: {
-        origin: '*',
+        origin: allowedOrigin,
         methods: ['GET', 'POST'],
       },
     });
@@ -31,22 +70,52 @@ export class SocketManager {
     this.setupSocketHandlers();
   }
 
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * Returns the cached room, falling back to storage on a cache miss.
+   * Always call this instead of `storage.getRoom` inside socket handlers.
+   */
+  private async getRoom(code: string): Promise<Room | undefined> {
+    const key = code.toUpperCase();
+    if (this.roomCache.has(key)) return this.roomCache.get(key);
+    const room = await storage.getRoom(key);
+    if (room) this.roomCache.set(key, room);
+    return room;
+  }
+
+  private invalidateRoom(code: string) {
+    this.roomCache.delete(code.toUpperCase());
+  }
+
+  /**
+   * Emits an error to the socket and returns false when the participant is not
+   * the host. Returns true when the check passes so callers can early-return.
+   * NOTE: hostId is stored as the username string (set in routes.ts).
+   */
+  private assertIsHost(socket: Socket, room: Room, participant: Participant): boolean {
+    if (room.hostId !== participant.username) {
+      socket.emit(EVENTS.ERROR, { message: 'Only the host can do this' });
+      return false;
+    }
+    return true;
+  }
+
   private setupSocketHandlers() {
     this.io.on('connection', (socket: Socket) => {
       console.log('Client connected:', socket.id);
 
-      // Join room
-      socket.on('join-room', async (data) => {
+      // ── Join room ─────────────────────────────────────────────────────────
+      socket.on(EVENTS.JOIN_ROOM, async (data) => {
         try {
           const validated = joinRoomSchema.parse(data);
-          const room = await storage.getRoom(validated.roomCode);
+          const room = await this.getRoom(validated.roomCode);
 
           if (!room) {
-            socket.emit('error', { message: 'Room not found' });
+            socket.emit(EVENTS.ERROR, { message: 'Room not found' });
             return;
           }
 
-          // Create participant
           const participant: Participant = {
             id: randomUUID(),
             username: validated.username,
@@ -61,32 +130,31 @@ export class SocketManager {
           this.participants.set(socket.id, participant);
           socket.join(validated.roomCode);
 
-          // Send room data to the joining user
           const messages = await storage.getMessages(validated.roomCode);
-          socket.emit('room-joined', {
+          socket.emit(EVENTS.ROOM_JOINED, {
             room,
             messages,
             participantId: participant.id,
           });
 
-          // Broadcast updated participant list
           this.broadcastParticipants(validated.roomCode);
-
           console.log(`${validated.username} joined room ${validated.roomCode}`);
         } catch (error) {
           console.error('Error joining room:', error);
-          socket.emit('error', { message: 'Failed to join room' });
+          socket.emit(EVENTS.ERROR, { message: 'Failed to join room' });
         }
       });
 
-      // Send message
-      socket.on('send-message', async (data) => {
+      // ── Send message ──────────────────────────────────────────────────────
+      socket.on(EVENTS.SEND_MESSAGE, async (data) => {
+        if (!this.rateLimiter.allow(socket.id)) return; // rate limit
+
         try {
           const validated = sendMessageSchema.parse(data);
           const participant = this.participants.get(socket.id);
 
           if (!participant) {
-            socket.emit('error', { message: 'Not in a room' });
+            socket.emit(EVENTS.ERROR, { message: 'Not in a room' });
             return;
           }
 
@@ -96,28 +164,28 @@ export class SocketManager {
             text: validated.text,
           });
 
-          // Broadcast message to all participants in the room
-          this.io.to(participant.roomCode).emit('new-message', message);
+          this.io.to(participant.roomCode).emit(EVENTS.NEW_MESSAGE, message);
         } catch (error) {
           console.error('Error sending message:', error);
-          socket.emit('error', { message: 'Failed to send message' });
+          socket.emit(EVENTS.ERROR, { message: 'Failed to send message' });
         }
       });
 
-      // Draw stroke
-      socket.on('draw-stroke', async (data) => {
+      // ── Draw stroke ───────────────────────────────────────────────────────
+      socket.on(EVENTS.DRAW_STROKE, async (data) => {
+        if (!this.rateLimiter.allow(socket.id)) return; // rate limit
+
         try {
           const validated = drawStrokeSchema.parse(data);
           const participant = this.participants.get(socket.id);
-
           if (!participant) return;
 
-          const room = await storage.getRoom(participant.roomCode);
+          const room = await this.getRoom(participant.roomCode);
           if (!room) return;
 
-          // Check if room is locked and user is not host
-          if (room.isLocked && room.hostId !== participant.id) {
-            socket.emit('error', { message: 'Room is locked' });
+          // Check lock (compare by username, hostId is stored as username)
+          if (room.isLocked && room.hostId !== participant.username) {
+            socket.emit(EVENTS.ERROR, { message: 'Room is locked' });
             return;
           }
 
@@ -127,84 +195,104 @@ export class SocketManager {
             timestamp: Date.now(),
           };
 
-          // Save stroke to database
           await storage.addStrokeToRoom(participant.roomCode, stroke);
 
-          // Broadcast stroke to all other participants
-          socket.to(participant.roomCode).emit('new-stroke', stroke);
+          // Keep cache in sync
+          const cached = this.roomCache.get(participant.roomCode.toUpperCase());
+          if (cached) cached.strokes.push(stroke);
+
+          socket.to(participant.roomCode).emit(EVENTS.NEW_STROKE, stroke);
         } catch (error) {
           console.error('Error drawing stroke:', error);
         }
       });
 
-      // Clear board (host only)
-      socket.on('clear-board', async () => {
+      // ── Clear board (host only) ───────────────────────────────────────────
+      socket.on(EVENTS.CLEAR_BOARD, async () => {
         try {
           const participant = this.participants.get(socket.id);
           if (!participant) return;
 
-          const room = await storage.getRoom(participant.roomCode);
-          if (!room || room.hostId !== participant.id) {
-            socket.emit('error', { message: 'Only host can clear the board' });
-            return;
-          }
+          const room = await this.getRoom(participant.roomCode);
+          if (!room || !this.assertIsHost(socket, room, participant)) return;
 
           await storage.clearRoomStrokes(participant.roomCode);
-          this.io.to(participant.roomCode).emit('board-cleared');
+          this.invalidateRoom(participant.roomCode);
+          this.io.to(participant.roomCode).emit(EVENTS.BOARD_CLEARED);
         } catch (error) {
           console.error('Error clearing board:', error);
         }
       });
 
-      // Set template (host only)
-      socket.on('set-template', async (data) => {
+      // ── Set template (host only) ──────────────────────────────────────────
+      socket.on(EVENTS.SET_TEMPLATE, async (data) => {
         try {
           const validated = setTemplateSchema.parse(data);
           const participant = this.participants.get(socket.id);
           if (!participant) return;
 
-          const room = await storage.getRoom(participant.roomCode);
-          if (!room || room.hostId !== participant.id) {
-            socket.emit('error', { message: 'Only host can set template' });
-            return;
-          }
+          const room = await this.getRoom(participant.roomCode);
+          if (!room || !this.assertIsHost(socket, room, participant)) return;
 
           await storage.updateRoomTemplate(participant.roomCode, validated.templateImage);
-          this.io.to(participant.roomCode).emit('template-changed', { templateImage: validated.templateImage });
+          this.invalidateRoom(participant.roomCode);
+          this.io.to(participant.roomCode).emit(EVENTS.TEMPLATE_CHANGED, {
+            templateImage: validated.templateImage,
+          });
         } catch (error) {
           console.error('Error setting template:', error);
         }
       });
 
-      // Toggle lock (host only)
-      socket.on('toggle-lock', async () => {
+      // ── Toggle lock (host only) ───────────────────────────────────────────
+      socket.on(EVENTS.TOGGLE_LOCK, async () => {
         try {
           const participant = this.participants.get(socket.id);
           if (!participant) return;
 
-          const room = await storage.getRoom(participant.roomCode);
-          if (!room || room.hostId !== participant.id) {
-            socket.emit('error', { message: 'Only host can toggle lock' });
-            return;
-          }
+          const room = await this.getRoom(participant.roomCode);
+          if (!room || !this.assertIsHost(socket, room, participant)) return;
 
           const newLockState = !room.isLocked;
           await storage.updateRoomLock(participant.roomCode, newLockState);
-          this.io.to(participant.roomCode).emit('lock-changed', { isLocked: newLockState });
+
+          const cached = this.roomCache.get(participant.roomCode.toUpperCase());
+          if (cached) cached.isLocked = newLockState;
+
+          this.io.to(participant.roomCode).emit(EVENTS.LOCK_CHANGED, {
+            isLocked: newLockState,
+          });
         } catch (error) {
           console.error('Error toggling lock:', error);
         }
       });
 
-      // Voice signaling
-      socket.on('voice-signal', (data) => {
+      // ── Cursor presence (throttled by client, no extra rate-limit needed) ─
+      socket.on(EVENTS.CURSOR_MOVE, (data) => {
+        const participant = this.participants.get(socket.id);
+        if (!participant) return;
+
+        try {
+          const validated = cursorMoveSchema.parse(data);
+          socket.to(participant.roomCode).emit(EVENTS.CURSOR_UPDATE, {
+            socketId: socket.id,
+            username: participant.username,
+            x: validated.x,
+            y: validated.y,
+          });
+        } catch {
+          // ignore invalid cursor data
+        }
+      });
+
+      // ── Voice signaling ───────────────────────────────────────────────────
+      socket.on(EVENTS.VOICE_SIGNAL, (data) => {
         try {
           const validated = voiceSignalSchema.parse(data);
           const participant = this.participants.get(socket.id);
           if (!participant) return;
 
-          // Relay signal to target
-          this.io.to(validated.targetId).emit('voice-signal', {
+          this.io.to(validated.targetId).emit(EVENTS.VOICE_SIGNAL, {
             userId: socket.id,
             signal: validated.signal,
           });
@@ -213,8 +301,8 @@ export class SocketManager {
         }
       });
 
-      // Voice state change (mute/speaking)
-      socket.on('voice-state-change', (data) => {
+      // ── Voice state change ────────────────────────────────────────────────
+      socket.on(EVENTS.VOICE_STATE_CHANGE, (data) => {
         const participant = this.participants.get(socket.id);
         if (!participant) return;
 
@@ -229,8 +317,8 @@ export class SocketManager {
         }
       });
 
-      // Raise hand
-      socket.on('raise-hand', (data) => {
+      // ── Raise hand ────────────────────────────────────────────────────────
+      socket.on(EVENTS.RAISE_HAND, (data) => {
         const participant = this.participants.get(socket.id);
         if (!participant) return;
 
@@ -244,12 +332,40 @@ export class SocketManager {
         }
       });
 
-      // Disconnect
+      // ── Disconnect ────────────────────────────────────────────────────────
       socket.on('disconnect', () => {
+        this.rateLimiter.remove(socket.id);
+
         const participant = this.participants.get(socket.id);
         if (participant) {
           console.log(`${participant.username} left room ${participant.roomCode}`);
           this.participants.delete(socket.id);
+
+          // Broadcast that this cursor is gone
+          socket.to(participant.roomCode).emit(EVENTS.CURSOR_UPDATE, {
+            socketId: socket.id,
+            username: participant.username,
+            x: -1,  // sentinel: remove cursor
+            y: -1,
+          });
+
+          // TTL evict cache when room becomes empty
+          const roomCode = participant.roomCode.toUpperCase();
+          const remaining = Array.from(this.participants.values()).filter(
+            p => p.roomCode === participant.roomCode
+          );
+          if (remaining.length === 0) {
+            setTimeout(() => {
+              const stillEmpty = !Array.from(this.participants.values()).some(
+                p => p.roomCode === participant.roomCode
+              );
+              if (stillEmpty) {
+                this.roomCache.delete(roomCode);
+                console.log(`Room ${roomCode} evicted from cache (empty).`);
+              }
+            }, 60_000);
+          }
+
           this.broadcastParticipants(participant.roomCode);
         }
         console.log('Client disconnected:', socket.id);
@@ -261,7 +377,7 @@ export class SocketManager {
     const roomParticipants = Array.from(this.participants.values())
       .filter(p => p.roomCode === roomCode);
 
-    this.io.to(roomCode).emit('participants-updated', roomParticipants);
+    this.io.to(roomCode).emit(EVENTS.PARTICIPANTS_UPDATED, roomParticipants);
   }
 
   getIO() {

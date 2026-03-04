@@ -1,12 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useSearch, useLocation } from "wouter";
 import { useSocket } from "@/lib/socket";
 import TopBar from "@/components/TopBar";
 import LeftToolbar from "@/components/LeftToolbar";
 import RightSidebar from "@/components/RightSidebar";
 import WhiteboardCanvas from "@/components/WhiteboardCanvas";
+import CursorOverlay from "@/components/CursorOverlay";
 import { VoiceChat } from "@/components/VoiceChat";
-
 import ColorPicker from "@/components/ColorPicker";
 import BrushSizeSlider from "@/components/BrushSizeSlider";
 import { Loader2 } from "lucide-react";
@@ -25,69 +25,64 @@ export default function Room() {
     messages,
     participants,
     participantId,
+    remoteStrokes,
+    consumeRemoteStrokes,
+    boardClearCount,
+    remoteCursors,
     joinRoom,
     sendMessage,
     drawStroke,
     clearBoard,
     toggleLock,
+    emitCursorMove,
   } = useSocket();
 
-  const [activeTool, setActiveTool] = useState<"pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter">("pen");
+  const [activeTool, setActiveTool] = useState<
+    "pen" | "eraser" | "rectangle" | "circle" | "text" | "marker" | "highlighter" | "magic"
+  >("pen");
   const [color, setColor] = useState("#000000");
   const [brushSize, setBrushSize] = useState(3);
-  const [canvasKey, setCanvasKey] = useState(0);
   const [localStrokes, setLocalStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
 
+  const saveCanvasRef = useRef<(() => void) | null>(null);
+
+  // Redirect if no credentials
   useEffect(() => {
     if (!username || !roomCode) {
       setLocation(`/?tab=join&code=${roomCode}`);
       return;
     }
+    if (!room) joinRoom({ roomCode, username });
+  }, [roomCode, username]);
 
-    if (!room) {
-      joinRoom({ roomCode, username });
-    }
-  }, [roomCode, username, joinRoom, setLocation, room]);
-
+  // React to board clear signal
   useEffect(() => {
-    const handleBoardCleared = () => {
-      setCanvasKey((prev) => prev + 1);
-      setLocalStrokes([]);
-      setRedoStack([]);
-    };
-
-    window.addEventListener("board-cleared", handleBoardCleared);
-    return () =>
-      window.removeEventListener("board-cleared", handleBoardCleared);
-  }, []);
+    if (boardClearCount === 0) return;
+    setLocalStrokes([]);
+    setRedoStack([]);
+  }, [boardClearCount]);
 
   const handleStrokeComplete = (stroke: InsertStroke) => {
-    const newStroke: Stroke = {
-      id: crypto.randomUUID(),
-      ...stroke,
-      timestamp: Date.now(),
-    };
-    setLocalStrokes((prev) => [...prev, newStroke]);
-    setRedoStack([]); // clear redo on new stroke
+    const newStroke: Stroke = { id: crypto.randomUUID(), ...stroke, timestamp: Date.now() };
+    setLocalStrokes(prev => [...prev, newStroke]);
+    setRedoStack([]);
     drawStroke(stroke);
   };
 
   const handleUndo = () => {
     if (localStrokes.length > 0) {
-      const lastStroke = localStrokes[localStrokes.length - 1];
-      setRedoStack((prev) => [...prev, lastStroke]);
-      setLocalStrokes((prev) => prev.slice(0, -1));
+      setRedoStack(prev => [...prev, localStrokes[localStrokes.length - 1]]);
+      setLocalStrokes(prev => prev.slice(0, -1));
     }
   };
 
   const handleRedo = () => {
     if (redoStack.length > 0) {
-      const stroke = redoStack[redoStack.length - 1];
-      setRedoStack((prev) => prev.slice(0, -1));
-      setLocalStrokes((prev) => [...prev, stroke]);
+      setLocalStrokes(prev => [...prev, redoStack[redoStack.length - 1]]);
+      setRedoStack(prev => prev.slice(0, -1));
     }
   };
 
@@ -97,6 +92,7 @@ export default function Room() {
     setRedoStack([]);
   };
 
+  // hostId is stored as username (see routes.ts)
   const isHost = room?.hostId === username;
 
   if (!room) {
@@ -112,29 +108,33 @@ export default function Room() {
 
   return (
     <div className="relative h-screen w-full overflow-hidden bg-background">
-      {/* Canvas Layer - Full Screen */}
+
+      {/* ── Canvas layer ── */}
       <div className="absolute inset-0 z-0">
         <WhiteboardCanvas
-          key={canvasKey}
           templateImage=""
           color={color}
           brushSize={brushSize}
           tool={activeTool}
           isLocked={room.isLocked && !isHost}
           onStrokeComplete={handleStrokeComplete}
-          existingStrokes={[
-            ...(room.strokes as Stroke[]),
-            ...localStrokes,
-          ]}
+          existingStrokes={[...(room.strokes as Stroke[]), ...localStrokes]}
+          remoteStrokes={remoteStrokes}
+          onRemoteStrokesConsumed={consumeRemoteStrokes}
+          saveRef={saveCanvasRef}
+          onCursorMove={emitCursorMove}
         />
+        {/* Cursor presence overlay – sits just above the canvas */}
+        <CursorOverlay cursors={remoteCursors} />
       </div>
 
-      {/* UI Layer - Floating on top */}
+      {/* ── UI layer ── */}
       <div className="absolute inset-0 z-10 pointer-events-none flex flex-col">
-        {/* Top Bar */}
+
         <div className="pointer-events-auto">
           <TopBar
             roomCode={roomCode}
+            username={username}
             userCount={participants.length}
             isHost={isHost}
             isLocked={room.isLocked}
@@ -144,7 +144,8 @@ export default function Room() {
         </div>
 
         <div className="flex-1 relative w-full">
-          {/* Left Toolbar - Floating Dock */}
+
+          {/* Left toolbar */}
           <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-auto">
             <LeftToolbar
               activeTool={activeTool}
@@ -152,13 +153,13 @@ export default function Room() {
               onUndo={handleUndo}
               onRedo={handleRedo}
               onClear={handleClear}
-              onSave={() => window.dispatchEvent(new CustomEvent("save-canvas"))}
+              onSave={() => saveCanvasRef.current?.()}
               canUndo={localStrokes.length > 0}
               canRedo={redoStack.length > 0}
             />
           </div>
 
-          {/* Top Center - Tools Settings */}
+          {/* Color + brush size bar */}
           <div className="absolute top-4 left-1/2 -translate-x-1/2 pointer-events-auto">
             <div className="flex items-center gap-6 p-3 rounded-full bg-card/90 backdrop-blur shadow-lg border border-border/50">
               <ColorPicker color={color} onChange={setColor} />
@@ -168,22 +169,19 @@ export default function Room() {
             </div>
           </div>
 
-          {/* Right Sidebar - Floating */}
+          {/* Right sidebar */}
           <div className="absolute right-4 bottom-4 pointer-events-auto flex flex-col justify-end">
             <RightSidebar
-              messages={messages.map((m) => ({
-                ...m,
-                timestamp: new Date(m.timestamp),
-              }))}
+              messages={messages.map(m => ({ ...m, timestamp: new Date(m.timestamp) }))}
               participants={participants}
               currentUsername={username}
               currentUserId={participantId}
               hostId={room?.hostId}
               onSendMessage={sendMessage}
               isMuted={isMuted}
-              onToggleMute={() => setIsMuted(!isMuted)}
+              onToggleMute={() => setIsMuted(v => !v)}
               isHandRaised={isHandRaised}
-              onToggleHand={() => setIsHandRaised(!isHandRaised)}
+              onToggleHand={() => setIsHandRaised(v => !v)}
             />
           </div>
         </div>
