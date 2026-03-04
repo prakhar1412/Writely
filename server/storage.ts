@@ -1,59 +1,15 @@
-import mongoose from "mongoose";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import {
   type Room,
   type Message,
   type InsertRoom,
   type InsertMessage,
   type Stroke,
-  pointSchema,
-  strokeSchema,
-  roomSchema,
-  messageSchema,
 } from "@shared/schema";
 
-const MONGO_URI = process.env.MONGO_URI;
-
-const PointSchema = new mongoose.Schema({
-  x: { type: Number, required: true },
-  y: { type: Number, required: true },
-});
-
-const StrokeSchema = new mongoose.Schema({
-  id: { type: String, required: true },
-  points: [PointSchema],
-  color: { type: String, required: true },
-  brushSize: { type: Number, required: true },
-  tool: { type: String, enum: ["pen", "eraser", "rectangle", "circle", "text", "marker", "highlighter"], required: true },
-  text: { type: String },
-  timestamp: { type: Number, required: true },
-});
-
-const RoomSchema = new mongoose.Schema({
-  code: {
-    type: String,
-    required: true,
-    unique: true,
-    uppercase: true,
-    length: 6,
-  },
-  hostId: { type: String, required: true },
-  isLocked: { type: Boolean, default: false },
-  templateImage: { type: String, default: "" },
-  strokes: [StrokeSchema],
-  createdAt: { type: Date, default: Date.now },
-});
-
-const MessageSchema = new mongoose.Schema({
-  roomCode: { type: String, required: true, uppercase: true, length: 6 },
-  username: { type: String, required: true },
-  text: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-});
-
-MessageSchema.index({ roomCode: 1, timestamp: 1 });
-
-const RoomModel = mongoose.model("Room", RoomSchema);
-const MessageModel = mongoose.model("Message", MessageSchema);
+// ─────────────────────────────────────────────────────────────
+// Interface
+// ─────────────────────────────────────────────────────────────
 
 export interface IStorage {
   // Room operations
@@ -69,112 +25,183 @@ export interface IStorage {
   getMessages(roomCode: string, limit?: number): Promise<Message[]>;
 }
 
-export class DbStorage implements IStorage {
-  private connected = false;
+// ─────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────
 
-  constructor() {
-    this.connect();
+function generateCode(): string {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// ─────────────────────────────────────────────────────────────
+// Supabase Storage
+// ─────────────────────────────────────────────────────────────
+
+export class SupabaseStorage implements IStorage {
+  private client: SupabaseClient;
+
+  constructor(url: string, anonKey: string) {
+    this.client = createClient(url, anonKey);
+    console.log("Using Supabase storage");
   }
 
-  private async connect() {
-    if (this.connected || !MONGO_URI) return;
-    try {
-      await mongoose.connect(MONGO_URI);
-      this.connected = true;
-      console.log("Connected to MongoDB");
-    } catch (error) {
-      console.error("MongoDB connection error:", error);
-    }
-  }
+  // ── Rooms ──────────────────────────────────────────────────
 
   async createRoom(insertRoom: InsertRoom): Promise<Room> {
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const code = generateCode();
 
-    const room = new RoomModel({
-      code,
-      hostId: insertRoom.hostId,
-      isLocked: false,
-      templateImage: "",
-      strokes: [],
-    });
+    const { data, error } = await this.client
+      .from("rooms")
+      .insert({
+        code,
+        host_id: insertRoom.hostId,
+        is_locked: false,
+        template_image: "",
+      })
+      .select()
+      .single();
 
-    const savedRoom = await room.save();
-    return savedRoom.toObject() as Room;
+    if (error) throw new Error(`createRoom: ${error.message}`);
+
+    return this.mapRoom(data, []);
   }
 
   async getRoom(code: string): Promise<Room | undefined> {
-    const room = await RoomModel.findOne({ code: code.toUpperCase() });
-    return room ? (room.toObject() as Room) : undefined;
+    const { data: roomRow, error: rErr } = await this.client
+      .from("rooms")
+      .select("*")
+      .eq("code", code.toUpperCase())
+      .single();
+
+    if (rErr || !roomRow) return undefined;
+
+    const { data: strokeRows } = await this.client
+      .from("strokes")
+      .select("*")
+      .eq("room_code", code.toUpperCase())
+      .order("timestamp", { ascending: true });
+
+    return this.mapRoom(roomRow, strokeRows ?? []);
   }
 
   async updateRoomLock(code: string, isLocked: boolean): Promise<void> {
-    await RoomModel.findOneAndUpdate(
-      { code: code.toUpperCase() },
-      { isLocked }
-    );
+    const { error } = await this.client
+      .from("rooms")
+      .update({ is_locked: isLocked })
+      .eq("code", code.toUpperCase());
+    if (error) throw new Error(`updateRoomLock: ${error.message}`);
   }
 
   async updateRoomTemplate(code: string, templateImage: string): Promise<void> {
-    await RoomModel.findOneAndUpdate(
-      { code: code.toUpperCase() },
-      { templateImage }
-    );
+    const { error } = await this.client
+      .from("rooms")
+      .update({ template_image: templateImage })
+      .eq("code", code.toUpperCase());
+    if (error) throw new Error(`updateRoomTemplate: ${error.message}`);
   }
 
   async addStrokeToRoom(code: string, stroke: Stroke): Promise<void> {
-    await RoomModel.findOneAndUpdate(
-      { code: code.toUpperCase() },
-      { $push: { strokes: stroke } }
-    );
+    const { error } = await this.client.from("strokes").insert({
+      id: stroke.id,
+      room_code: code.toUpperCase(),
+      points: stroke.points,
+      color: stroke.color,
+      brush_size: stroke.brushSize,
+      tool: stroke.tool,
+      text_content: stroke.text ?? null,
+      timestamp: stroke.timestamp,
+    });
+    if (error) throw new Error(`addStrokeToRoom: ${error.message}`);
   }
 
   async clearRoomStrokes(code: string): Promise<void> {
-    await RoomModel.findOneAndUpdate(
-      { code: code.toUpperCase() },
-      { $set: { strokes: [] } }
-    );
+    const { error } = await this.client
+      .from("strokes")
+      .delete()
+      .eq("room_code", code.toUpperCase());
+    if (error) throw new Error(`clearRoomStrokes: ${error.message}`);
   }
 
-  async createMessage(insertMessage: InsertMessage): Promise<Message> {
-    const message = new MessageModel({
-      roomCode: insertMessage.roomCode.toUpperCase(),
-      username: insertMessage.username,
-      text: insertMessage.text,
-    });
+  // ── Messages ───────────────────────────────────────────────
 
-    const savedMessage = await message.save();
-    const obj = savedMessage.toObject();
-    return { ...obj, id: obj._id.toString() } as Message;
+  async createMessage(insertMessage: InsertMessage): Promise<Message> {
+    const { data, error } = await this.client
+      .from("messages")
+      .insert({
+        room_code: insertMessage.roomCode.toUpperCase(),
+        username: insertMessage.username,
+        content: insertMessage.text,
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(`createMessage: ${error.message}`);
+
+    return this.mapMessage(data);
   }
 
   async getMessages(roomCode: string, limit: number = 100): Promise<Message[]> {
-    const messages = await MessageModel.find({
-      roomCode: roomCode.toUpperCase(),
-    })
-      .sort({ timestamp: 1 })
+    const { data, error } = await this.client
+      .from("messages")
+      .select("*")
+      .eq("room_code", roomCode.toUpperCase())
+      .order("created_at", { ascending: true })
       .limit(limit);
-    return messages.map((m) => {
-      const obj = m.toObject();
-      return {
-        ...obj,
-        id: obj._id.toString(),
-        timestamp: new Date(obj.timestamp),
-      } as Message;
-    });
+
+    if (error) throw new Error(`getMessages: ${error.message}`);
+    return (data ?? []).map(this.mapMessage);
+  }
+
+  // ── Mappers ────────────────────────────────────────────────
+
+  private mapRoom(row: Record<string, unknown>, strokeRows: Record<string, unknown>[]): Room {
+    return {
+      code: row.code as string,
+      hostId: row.host_id as string,
+      isLocked: row.is_locked as boolean,
+      templateImage: (row.template_image as string) ?? "",
+      createdAt: new Date(row.created_at as string),
+      strokes: strokeRows.map(this.mapStroke),
+    };
+  }
+
+  private mapStroke(row: Record<string, unknown>): Stroke {
+    return {
+      id: row.id as string,
+      points: row.points as { x: number; y: number }[],
+      color: row.color as string,
+      brushSize: Number(row.brush_size),
+      tool: row.tool as Stroke["tool"],
+      text: (row.text_content as string) ?? undefined,
+      timestamp: Number(row.timestamp),
+    };
+  }
+
+  private mapMessage(row: Record<string, unknown>): Message {
+    return {
+      id: row.id as string,
+      roomCode: row.room_code as string,
+      username: row.username as string,
+      text: row.content as string,
+      timestamp: new Date(row.created_at as string),
+    };
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// In-Memory Fallback (for local dev without Supabase)
+// ─────────────────────────────────────────────────────────────
+
 export class MemStorage implements IStorage {
-  private rooms: Map<string, Room>;
-  private messages: Map<string, Message[]>;
+  private rooms: Map<string, Room> = new Map();
+  private messages: Map<string, Message[]> = new Map();
 
   constructor() {
-    this.rooms = new Map();
-    this.messages = new Map();
+    console.log("Using in-memory storage (no SUPABASE_URL set)");
   }
 
   async createRoom(insertRoom: InsertRoom): Promise<Room> {
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const code = generateCode();
     const room: Room = {
       code,
       hostId: insertRoom.hostId,
@@ -193,18 +220,12 @@ export class MemStorage implements IStorage {
 
   async updateRoomLock(code: string, isLocked: boolean): Promise<void> {
     const room = this.rooms.get(code.toUpperCase());
-    if (room) {
-      room.isLocked = isLocked;
-      this.rooms.set(code.toUpperCase(), room);
-    }
+    if (room) this.rooms.set(code.toUpperCase(), { ...room, isLocked });
   }
 
   async updateRoomTemplate(code: string, templateImage: string): Promise<void> {
     const room = this.rooms.get(code.toUpperCase());
-    if (room) {
-      room.templateImage = templateImage;
-      this.rooms.set(code.toUpperCase(), room);
-    }
+    if (room) this.rooms.set(code.toUpperCase(), { ...room, templateImage });
   }
 
   async addStrokeToRoom(code: string, stroke: Stroke): Promise<void> {
@@ -217,10 +238,7 @@ export class MemStorage implements IStorage {
 
   async clearRoomStrokes(code: string): Promise<void> {
     const room = this.rooms.get(code.toUpperCase());
-    if (room) {
-      room.strokes = [];
-      this.rooms.set(code.toUpperCase(), room);
-    }
+    if (room) this.rooms.set(code.toUpperCase(), { ...room, strokes: [] });
   }
 
   async createMessage(insertMessage: InsertMessage): Promise<Message> {
@@ -232,19 +250,27 @@ export class MemStorage implements IStorage {
       text: insertMessage.text,
       timestamp: new Date(),
     };
-
-    const roomMessages = this.messages.get(insertMessage.roomCode.toUpperCase()) || [];
-    roomMessages.push(message);
-    this.messages.set(insertMessage.roomCode.toUpperCase(), roomMessages);
-
+    const list = this.messages.get(insertMessage.roomCode.toUpperCase()) ?? [];
+    list.push(message);
+    this.messages.set(insertMessage.roomCode.toUpperCase(), list);
     return message;
   }
 
   async getMessages(roomCode: string, limit: number = 100): Promise<Message[]> {
-    return (this.messages.get(roomCode.toUpperCase()) || [])
+    return (this.messages.get(roomCode.toUpperCase()) ?? [])
       .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
       .slice(0, limit);
   }
 }
 
-export const storage = MONGO_URI ? new DbStorage() : new MemStorage();
+// ─────────────────────────────────────────────────────────────
+// Export singleton – prefers Supabase if env vars are present
+// ─────────────────────────────────────────────────────────────
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+
+export const storage: IStorage =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? new SupabaseStorage(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : new MemStorage();
